@@ -93,6 +93,15 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Mostrar los comandos sin ejecutarlos realmente.",
     )
+    parser.add_argument(
+        "--project-name",
+        help="Nombre del proyecto Django a crear si aún no existe manage.py.",
+    )
+    parser.add_argument(
+        "--force-startproject",
+        action="store_true",
+        help="Forzar la creación de un nuevo proyecto Django si no existe manage.py.",
+    )
     return parser.parse_args(argv)
 
 
@@ -101,12 +110,14 @@ def mostrar_comando(comando: list[str]) -> None:
     print(f"$ {printable}")
 
 
-def run_command(comando: list[str], *, dry_run: bool) -> None:
+def run_command(
+    comando: list[str], *, dry_run: bool, cwd: Optional[Path] = None
+) -> None:
     mostrar_comando(comando)
     if dry_run:
         print("[dry-run] Comando no ejecutado.")
         return
-    subprocess.run(comando, check=True)
+    subprocess.run(comando, check=True, cwd=cwd)
 
 
 def asegurar_ruta(path: Path, descripcion: str) -> Path:
@@ -159,6 +170,24 @@ def run_pip(venv_python: Path, argumentos: list[str], *, dry_run: bool) -> None:
     run_command(comando, dry_run=dry_run)
 
 
+def crear_proyecto_django(
+    venv_python: Path,
+    destino: Path,
+    nombre: str,
+    *,
+    dry_run: bool,
+) -> None:
+    if not nombre:
+        raise BootstrapError("El nombre del proyecto Django no puede estar vacío.")
+    if not destino.exists():
+        raise BootstrapError(
+            f"El directorio destino {destino} no existe. Créalo antes de continuar."
+        )
+    comando = [str(venv_python), "-m", "django", "startproject", nombre, "."]
+    print(f"Creando proyecto Django '{nombre}' en {destino}")
+    run_command(comando, dry_run=dry_run, cwd=destino)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
@@ -169,24 +198,47 @@ def main(argv: Optional[list[str]] = None) -> int:
         asegurar_ruta(project_root, "el directorio del proyecto")
 
         manage_py = project_root / "manage.py"
-        if not manage_py.exists():
-            respuesta = prompt(
-                "No se encontró manage.py en la ruta indicada. Ingresa la ruta manualmente"
-            )
-            manage_py = Path(respuesta).expanduser().resolve()
-        asegurar_ruta(manage_py, "manage.py")
+        manage_existe = manage_py.exists()
 
         venv_path = resolver_virtualenv(args.venv)
         activate_script = asegurar_ruta(venv_path / "bin" / "activate", "el script activate")
         venv_python = venv_path / "bin" / "python"
         asegurar_ruta(venv_python, "el ejecutable python del virtualenv")
 
-        requirements_path = resolver_requirements(project_root, args.requirements)
-        asegurar_ruta(requirements_path, "requirements.txt")
-
         dry_run = args.dry_run
         if dry_run:
             print("🧪 Modo dry-run: se mostrarán los comandos sin ejecutarlos.")
+
+        if not manage_existe:
+            print(
+                f"\nNo se encontró manage.py en {project_root}. "
+                "Podés señalar un proyecto existente o crear uno nuevo."
+            )
+            if prompt_bool("¿Deseas crear un nuevo proyecto Django aquí?", args.force_startproject):
+                nombre_proyecto = (
+                    args.project_name
+                    or prompt("Nombre del proyecto Django (usado en startproject)")
+                )
+                crear_proyecto_django(
+                    venv_python, project_root, nombre_proyecto, dry_run=dry_run
+                )
+                manage_py = project_root / "manage.py"
+                manage_existe = manage_py.exists()
+                if not manage_existe:
+                    raise BootstrapError(
+                        "Luego de ejecutar startproject no se encontró manage.py. "
+                        "Verifica manualmente la estructura creada."
+                    )
+            else:
+                respuesta = prompt(
+                    "Ingresa la ruta completa a un manage.py existente"
+                )
+                manage_py = Path(respuesta).expanduser().resolve()
+                asegurar_ruta(manage_py, "manage.py")
+                project_root = manage_py.parent
+
+        requirements_path = resolver_requirements(project_root, args.requirements)
+        asegurar_ruta(requirements_path, "requirements.txt")
 
         upgrade_pip = args.upgrade_pip or prompt_bool(
             "¿Actualizar pip en el virtualenv antes de instalar dependencias?", False

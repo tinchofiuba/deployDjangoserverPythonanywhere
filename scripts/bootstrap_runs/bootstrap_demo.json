@@ -1,0 +1,13 @@
+{
+  "timestamp": "demo",
+  "domain": "hqthidroponia.pythonanywhere.com",
+  "project_root": "/home/HQThidroponia/deployDjangoserverPythonanywhere",
+  "manage_py": "/home/HQThidroponia/deployDjangoserverPythonanywhere/manage.py",
+  "venv_path": "/home/HQThidroponia/.virtualenvs/hidroponia_env",
+  "static_root": "/home/HQThidroponia/deployDjangoserverPythonanywhere/staticfiles",
+  "python_version": "3.10.12",
+  "requirements_path": "/home/HQThidroponia/deployDjangoserverPythonanywhere/requirements.txt",
+  "dry_run": false,
+  "wsgi_path": "/var/www/hqthidroponia_pythonanywhere_com_wsgi.py"
+}
+

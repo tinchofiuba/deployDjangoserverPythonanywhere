@@ -18,7 +18,6 @@ import argparse
 import shlex
 import subprocess
 import sys
-import re
 from pathlib import Path
 from typing import Optional
 
@@ -222,23 +221,32 @@ def crear_proyecto_django(
     run_command(comando, dry_run=dry_run, cwd=destino)
 
 
-def detectar_settings_module(manage_py: Path) -> Optional[str]:
+def detectar_settings_file(manage_py: Path) -> Optional[Path]:
+    for candidato in [
+        manage_py.parent / "settings.py",
+        manage_py.parent / manage_py.stem / "settings.py",
+    ]:
+        if candidato.exists():
+            return candidato
+
     try:
         contenido = manage_py.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-    coincidencia = re.search(
-        r"DJANGO_SETTINGS_MODULE',\s*'([^']+)'", contenido, flags=re.MULTILINE
-    )
-    if coincidencia:
-        return coincidencia.group(1)
-    return None
 
+    for linea in contenido.splitlines():
+        if "DJANGO_SETTINGS_MODULE" in linea and "=" in linea:
+            derecha = linea.split("=", 1)[1].strip().strip("'\"")
+            if not derecha:
+                continue
+            modulo = derecha
+            break
+    else:
+        modulo = None
 
-def detectar_settings_file(manage_py: Path) -> Optional[Path]:
-    modulo = detectar_settings_module(manage_py)
     if not modulo:
         return None
+
     partes = modulo.split(".")
     ruta = manage_py.parent
     for parte in partes[:-1]:
@@ -263,25 +271,43 @@ def asegurar_static_root(
         return None
 
     try:
-        static_root = run_manage_py_capture(
-            venv_python,
-            manage_py,
-            ["shell", "-c", "from django.conf import settings; print(settings.STATIC_ROOT or '')"],
-            dry_run=dry_run,
-        ).strip()
-    except subprocess.CalledProcessError:
-        static_root = ""
+        contenido = settings_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"⚠️ No se pudo abrir {settings_path} para revisar STATIC_ROOT.")
+        return None
 
-    if static_root:
-        static_root_path = Path(static_root)
+    static_root_line = None
+    for linea in contenido.splitlines():
+        if "STATIC_ROOT" in linea and "=" in linea:
+            static_root_line = linea
+            break
+
+    if static_root_line:
+        derecha = static_root_line.split("=", 1)[1].strip()
+        if derecha.startswith(("'", '"')):
+            valor = derecha.strip("'\"")
+            static_root_path = Path(valor)
+        elif derecha.startswith("BASE_DIR"):
+            parte = derecha.replace("BASE_DIR", "").strip()
+            # Esperamos formato " / \"staticfiles\"" o similar
+            parte = parte.strip()
+            if parte.startswith("/"):
+                parte = parte[1:]
+            parte = parte.strip()
+            if parte.startswith(("'", '"')):
+                parte = parte.strip("'\"")
+            static_root_path = (project_root / parte).resolve()
+        else:
+            static_root_path = Path(derecha)
+
         if not static_root_path.is_absolute():
             static_root_path = (project_root / static_root_path).resolve()
+
         if not static_root_path.exists():
-            print(f"STATIC_ROOT apunta a {static_root_path}, que no existe.")
             if skip_auto:
                 print(
-                    "ℹ️ Se omitió la creación automática del directorio. "
-                    "Crealo manualmente para evitar fallos en collectstatic."
+                    f"ℹ️ STATIC_ROOT apunta a {static_root_path}, pero no existe. "
+                    "Crealo manualmente (flag --skip-auto-static-root activo)."
                 )
             else:
                 if dry_run:
@@ -291,10 +317,6 @@ def asegurar_static_root(
                     print(f"Se creó el directorio {static_root_path}.")
         return static_root_path
 
-    print(
-        "⚠️ El proyecto no tiene STATIC_ROOT configurado en settings.py. "
-        "Collectstatic fallará hasta que se defina."
-    )
     if skip_auto:
         print(
             "ℹ️ Se omitió agregar STATIC_ROOT automáticamente (flag --skip-auto-static-root). "
@@ -302,6 +324,10 @@ def asegurar_static_root(
         )
         return None
 
+    print(
+        f"STATIC_ROOT no estaba configurado en {settings_path}. "
+        "Se agregará automáticamente."
+    )
     static_root_path = (project_root / "staticfiles").resolve()
     if dry_run:
         print("[dry-run] No se modifica settings.py ni se crean carpetas.")

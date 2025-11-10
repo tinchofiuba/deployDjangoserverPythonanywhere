@@ -222,27 +222,27 @@ def crear_proyecto_django(
 
 
 def detectar_settings_file(manage_py: Path) -> Optional[Path]:
-    for candidato in [
-        manage_py.parent / "settings.py",
-        manage_py.parent / manage_py.stem / "settings.py",
-    ]:
-        if candidato.exists():
-            return candidato
-
     try:
         contenido = manage_py.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
 
+    modulo = None
     for linea in contenido.splitlines():
-        if "DJANGO_SETTINGS_MODULE" in linea and "=" in linea:
-            derecha = linea.split("=", 1)[1].strip().strip("'\"")
-            if not derecha:
-                continue
-            modulo = derecha
+        if "DJANGO_SETTINGS_MODULE" not in linea:
+            continue
+        if "=" not in linea:
+            continue
+        derecha = linea.split("=", 1)[1].strip()
+        # Quitar envoltorios típicos: os.environ.setdefault(..., 'modulo')
+        derecha = derecha.rstrip(")").strip()
+        if derecha.endswith(","):
+            derecha = derecha[:-1].strip()
+        if derecha.startswith(("'", '"')) and derecha.endswith(("'", '"')):
+            derecha = derecha[1:-1]
+        modulo = derecha
+        if modulo:
             break
-    else:
-        modulo = None
 
     if not modulo:
         return None

@@ -103,6 +103,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Forzar la creación de un nuevo proyecto Django si no existe manage.py.",
     )
+    parser.add_argument(
+        "--skip-auto-static-root",
+        action="store_true",
+        help="No agregar automáticamente STATIC_ROOT ni crear su directorio.",
+    )
     return parser.parse_args(argv)
 
 
@@ -247,6 +252,7 @@ def asegurar_static_root(
     project_root: Path,
     *,
     dry_run: bool,
+    skip_auto: bool,
 ) -> Optional[Path]:
     settings_path = detectar_settings_file(manage_py)
     if not settings_path or not settings_path.exists():
@@ -272,20 +278,28 @@ def asegurar_static_root(
             static_root_path = (project_root / static_root_path).resolve()
         if not static_root_path.exists():
             print(f"STATIC_ROOT apunta a {static_root_path}, que no existe.")
-            if prompt_bool("¿Crear el directorio para STATIC_ROOT?", True):
+            if skip_auto:
+                print(
+                    "ℹ️ Se omitió la creación automática del directorio. "
+                    "Crealo manualmente para evitar fallos en collectstatic."
+                )
+            else:
                 if dry_run:
                     print(f"[dry-run] mkdir -p {static_root_path}")
                 else:
                     static_root_path.mkdir(parents=True, exist_ok=True)
+                    print(f"Se creó el directorio {static_root_path}.")
         return static_root_path
 
     print(
         "⚠️ El proyecto no tiene STATIC_ROOT configurado en settings.py. "
         "Collectstatic fallará hasta que se defina."
     )
-    if not prompt_bool(
-        "¿Agregar STATIC_ROOT = BASE_DIR / 'staticfiles' automáticamente en settings.py?", True
-    ):
+    if skip_auto:
+        print(
+            "ℹ️ Se omitió agregar STATIC_ROOT automáticamente (flag --skip-auto-static-root). "
+            "Configúralo manualmente para habilitar collectstatic."
+        )
         return None
 
     static_root_path = (project_root / "staticfiles").resolve()
@@ -359,7 +373,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         asegurar_ruta(requirements_path, "requirements.txt")
 
         static_root_path = asegurar_static_root(
-            venv_python, manage_py, project_root, dry_run=dry_run
+            venv_python,
+            manage_py,
+            project_root,
+            dry_run=dry_run,
+            skip_auto=args.skip_auto_static_root,
         )
 
         upgrade_pip = args.upgrade_pip or prompt_bool(

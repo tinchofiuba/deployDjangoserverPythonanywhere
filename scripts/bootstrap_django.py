@@ -18,6 +18,7 @@ import argparse
 import shlex
 import subprocess
 import sys
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -111,13 +112,17 @@ def mostrar_comando(comando: list[str]) -> None:
 
 
 def run_command(
-    comando: list[str], *, dry_run: bool, cwd: Optional[Path] = None
+    comando: list[str],
+    *,
+    dry_run: bool,
+    cwd: Optional[Path] = None,
+    capture_output: bool = False,
 ) -> None:
     mostrar_comando(comando)
     if dry_run:
         print("[dry-run] Comando no ejecutado.")
         return
-    subprocess.run(comando, check=True, cwd=cwd)
+    subprocess.run(comando, check=True, cwd=cwd, capture_output=capture_output)
 
 
 def asegurar_ruta(path: Path, descripcion: str) -> Path:
@@ -170,6 +175,30 @@ def run_pip(venv_python: Path, argumentos: list[str], *, dry_run: bool) -> None:
     run_command(comando, dry_run=dry_run)
 
 
+def run_manage_py_capture(
+    venv_python: Path,
+    manage_py: Path,
+    argumentos: list[str],
+    *,
+    dry_run: bool,
+) -> str:
+    comando = [str(venv_python), str(manage_py), *argumentos]
+    mostrar_comando(comando)
+    if dry_run:
+        print("[dry-run] Comando no ejecutado (sin salida).")
+        return ""
+    resultado = subprocess.run(
+        comando,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    salida = resultado.stdout.strip()
+    if resultado.stderr:
+        print(resultado.stderr.strip())
+    return salida
+
+
 def crear_proyecto_django(
     venv_python: Path,
     destino: Path,
@@ -186,6 +215,95 @@ def crear_proyecto_django(
     comando = [str(venv_python), "-m", "django", "startproject", nombre, "."]
     print(f"Creando proyecto Django '{nombre}' en {destino}")
     run_command(comando, dry_run=dry_run, cwd=destino)
+
+
+def detectar_settings_module(manage_py: Path) -> Optional[str]:
+    try:
+        contenido = manage_py.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    coincidencia = re.search(
+        r"DJANGO_SETTINGS_MODULE',\s*'([^']+)'", contenido, flags=re.MULTILINE
+    )
+    if coincidencia:
+        return coincidencia.group(1)
+    return None
+
+
+def detectar_settings_file(manage_py: Path) -> Optional[Path]:
+    modulo = detectar_settings_module(manage_py)
+    if not modulo:
+        return None
+    partes = modulo.split(".")
+    ruta = manage_py.parent
+    for parte in partes[:-1]:
+        ruta /= parte
+    return ruta / f"{partes[-1]}.py"
+
+
+def asegurar_static_root(
+    venv_python: Path,
+    manage_py: Path,
+    project_root: Path,
+    *,
+    dry_run: bool,
+) -> Optional[Path]:
+    settings_path = detectar_settings_file(manage_py)
+    if not settings_path or not settings_path.exists():
+        print(
+            "⚠️ No se pudo determinar el archivo settings.py. "
+            "Revisa la variable DJANGO_SETTINGS_MODULE en manage.py."
+        )
+        return None
+
+    try:
+        static_root = run_manage_py_capture(
+            venv_python,
+            manage_py,
+            ["shell", "-c", "from django.conf import settings; print(settings.STATIC_ROOT or '')"],
+            dry_run=dry_run,
+        ).strip()
+    except subprocess.CalledProcessError:
+        static_root = ""
+
+    if static_root:
+        static_root_path = Path(static_root)
+        if not static_root_path.is_absolute():
+            static_root_path = (project_root / static_root_path).resolve()
+        if not static_root_path.exists():
+            print(f"STATIC_ROOT apunta a {static_root_path}, que no existe.")
+            if prompt_bool("¿Crear el directorio para STATIC_ROOT?", True):
+                if dry_run:
+                    print(f"[dry-run] mkdir -p {static_root_path}")
+                else:
+                    static_root_path.mkdir(parents=True, exist_ok=True)
+        return static_root_path
+
+    print(
+        "⚠️ El proyecto no tiene STATIC_ROOT configurado en settings.py. "
+        "Collectstatic fallará hasta que se defina."
+    )
+    if not prompt_bool(
+        "¿Agregar STATIC_ROOT = BASE_DIR / 'staticfiles' automáticamente en settings.py?", True
+    ):
+        return None
+
+    static_root_path = (project_root / "staticfiles").resolve()
+    if dry_run:
+        print("[dry-run] No se modifica settings.py ni se crean carpetas.")
+        return static_root_path
+
+    with settings_path.open("a", encoding="utf-8") as archivo:
+        archivo.write(
+            "\n\n# Añadido automáticamente por scripts/bootstrap_django.py\n"
+            "STATIC_ROOT = BASE_DIR / \"staticfiles\"\n"
+        )
+    static_root_path.mkdir(parents=True, exist_ok=True)
+    print(
+        f"Se agregó STATIC_ROOT = BASE_DIR / 'staticfiles' en {settings_path} "
+        f"y se creó el directorio {static_root_path}."
+    )
+    return static_root_path
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -240,6 +358,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         requirements_path = resolver_requirements(project_root, args.requirements)
         asegurar_ruta(requirements_path, "requirements.txt")
 
+        static_root_path = asegurar_static_root(
+            venv_python, manage_py, project_root, dry_run=dry_run
+        )
+
         upgrade_pip = args.upgrade_pip or prompt_bool(
             "¿Actualizar pip en el virtualenv antes de instalar dependencias?", False
         )
@@ -262,6 +384,10 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"Virtualenv: {venv_path}")
         print(f"Script activate: {activate_script}")
         print(f"Requirements: {requirements_path}")
+        if static_root_path:
+            print(f"STATIC_ROOT: {static_root_path}")
+        else:
+            print("STATIC_ROOT: no configurado (collectstatic podría fallar)")
         print(f"Actualizar pip: {'si' if upgrade_pip else 'no'}")
         print(f"Instalar dependencias: {'si' if instalar else 'no'}")
         print(f"manage.py check: {'si' if correr_check else 'no'}")

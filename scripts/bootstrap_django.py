@@ -18,6 +18,7 @@ import argparse
 import shlex
 import subprocess
 import sys
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -228,20 +229,18 @@ def detectar_settings_file(manage_py: Path) -> Optional[Path]:
         return None
 
     modulo = None
-    for linea in contenido.splitlines():
-        if "DJANGO_SETTINGS_MODULE" not in linea:
-            continue
-        if "=" not in linea:
-            continue
-        derecha = linea.split("=", 1)[1].strip()
-        # Quitar envoltorios típicos: os.environ.setdefault(..., 'modulo')
-        derecha = derecha.rstrip(")").strip()
-        if derecha.endswith(","):
-            derecha = derecha[:-1].strip()
-        if derecha.startswith(("'", '"')) and derecha.endswith(("'", '"')):
-            derecha = derecha[1:-1]
-        modulo = derecha
-        if modulo:
+    patrones = [
+        re.compile(
+            r"setdefault\(\s*['\"]DJANGO_SETTINGS_MODULE['\"]\s*,\s*['\"]([^'\"]+)['\"]"
+        ),
+        re.compile(
+            r"DJANGO_SETTINGS_MODULE['\"]\s*=\s*['\"]([^'\"]+)['\"]"
+        ),
+    ]
+    for patron in patrones:
+        coincidencia = patron.search(contenido)
+        if coincidencia:
+            modulo = coincidencia.group(1)
             break
 
     if not modulo:

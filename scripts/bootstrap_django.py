@@ -158,9 +158,7 @@ def resolver_requirements(project_root: Path, valor_cli: Optional[str]) -> Path:
     if valor_cli:
         return Path(valor_cli).expanduser().resolve()
     por_defecto = project_root / "requirements.txt"
-    respuesta = prompt(
-        "Ruta al requirements.txt", str(por_defecto)
-    )
+    respuesta = prompt("Ruta al requirements.txt", str(por_defecto))
     return Path(respuesta).expanduser().resolve()
 
 
@@ -233,9 +231,7 @@ def detectar_settings_file(manage_py: Path) -> Optional[Path]:
         re.compile(
             r"setdefault\(\s*['\"]DJANGO_SETTINGS_MODULE['\"]\s*,\s*['\"]([^'\"]+)['\"]"
         ),
-        re.compile(
-            r"DJANGO_SETTINGS_MODULE['\"]\s*=\s*['\"]([^'\"]+)['\"]"
-        ),
+        re.compile(r"DJANGO_SETTINGS_MODULE['\"]\s*=\s*['\"]([^'\"]+)['\"]"),
     ]
     for patron in patrones:
         coincidencia = patron.search(contenido)
@@ -335,7 +331,7 @@ def asegurar_static_root(
     with settings_path.open("a", encoding="utf-8") as archivo:
         archivo.write(
             "\n\n# Añadido automáticamente por scripts/bootstrap_django.py\n"
-            "STATIC_ROOT = BASE_DIR / \"staticfiles\"\n"
+            'STATIC_ROOT = BASE_DIR / "staticfiles"\n'
         )
     static_root_path.mkdir(parents=True, exist_ok=True)
     print(
@@ -358,7 +354,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         manage_existe = manage_py.exists()
 
         venv_path = resolver_virtualenv(args.venv)
-        activate_script = asegurar_ruta(venv_path / "bin" / "activate", "el script activate")
+        activate_script = asegurar_ruta(
+            venv_path / "bin" / "activate", "el script activate"
+        )
         venv_python = venv_path / "bin" / "python"
         asegurar_ruta(venv_python, "el ejecutable python del virtualenv")
 
@@ -371,10 +369,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 f"\nNo se encontró manage.py en {project_root}. "
                 "Podés señalar un proyecto existente o crear uno nuevo."
             )
-            if prompt_bool("¿Deseas crear un nuevo proyecto Django aquí?", args.force_startproject):
-                nombre_proyecto = (
-                    args.project_name
-                    or prompt("Nombre del proyecto Django (usado en startproject)")
+            if prompt_bool(
+                "¿Deseas crear un nuevo proyecto Django aquí?", args.force_startproject
+            ):
+                nombre_proyecto = args.project_name or prompt(
+                    "Nombre del proyecto Django (usado en startproject)"
                 )
                 crear_proyecto_django(
                     venv_python, project_root, nombre_proyecto, dry_run=dry_run
@@ -387,9 +386,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                         "Verifica manualmente la estructura creada."
                     )
             else:
-                respuesta = prompt(
-                    "Ingresa la ruta completa a un manage.py existente"
-                )
+                respuesta = prompt("Ingresa la ruta completa a un manage.py existente")
                 manage_py = Path(respuesta).expanduser().resolve()
                 asegurar_ruta(manage_py, "manage.py")
                 project_root = manage_py.parent
@@ -467,11 +464,15 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("Recuerda desde el panel de PythonAnywhere:")
         print("  - Configurar el virtualenv en Web → Manual configuration.")
         print("  - Verificar que el archivo WSGI apunta al settings correcto.")
-        print("  - Actualizar las rutas de archivos estáticos y media en la sección Static files.")
+        print(
+            "  - Actualizar las rutas de archivos estáticos y media en la sección Static files."
+        )
         print("  - Reiniciar la webapp para aplicar los cambios.")
 
         if dry_run:
-            print("\n⚠️ Como estaba en modo dry-run, ninguna acción se ejecutó realmente.")
+            print(
+                "\n⚠️ Como estaba en modo dry-run, ninguna acción se ejecutó realmente."
+            )
 
         return 0
 
@@ -488,4 +489,3 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

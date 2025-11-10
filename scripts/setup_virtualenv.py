@@ -132,7 +132,9 @@ def _mostrar_comando(comando: list[str]) -> None:
     print(f"$ {joined}")
 
 
-def crear_virtualenv(destino: Path, python_bin: str, *, dry_run: bool, reuse: bool) -> bool:
+def crear_virtualenv(
+    destino: Path, python_bin: str, *, dry_run: bool, reuse: bool
+) -> bool:
     """Crea el entorno virtual usando el intérprete indicado. Devuelve True si se creó."""
     if destino.exists():
         if reuse:
@@ -250,9 +252,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.skip_install:
             print("Se omitió la instalación de dependencias (--skip-install).")
         else:
-            instalar_dependencias(
-                venv_path, requirements_path, dry_run=args.dry_run
-            )
+            instalar_dependencias(venv_path, requirements_path, dry_run=args.dry_run)
             dependencias_instaladas = not args.dry_run
 
         mostrar_resumen_final(
@@ -278,4 +278,3 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

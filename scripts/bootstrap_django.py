@@ -341,6 +341,32 @@ def asegurar_static_root(
     return static_root_path
 
 
+def agregar_a_gitignore(repo_root: Path, project_root: Path) -> None:
+    try:
+        relative = project_root.relative_to(repo_root)
+    except ValueError:
+        return
+
+    if not relative.parts:
+        return
+    if relative.parts[0] == "scripts":
+        return
+
+    gitignore_path = repo_root / ".gitignore"
+    entry = f"{relative}/"
+
+    if gitignore_path.exists():
+        lineas = gitignore_path.read_text(encoding="utf-8").splitlines()
+        if any(line.strip() == entry for line in lineas):
+            return
+    else:
+        lineas = []
+
+    lineas.append(entry)
+    gitignore_path.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+    print(f"ℹ️ Se añadió '{entry}' a {gitignore_path} para ignorar el proyecto Django.")
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv or sys.argv[1:])
 
@@ -473,6 +499,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(
                 "\n⚠️ Como estaba en modo dry-run, ninguna acción se ejecutó realmente."
             )
+
+        repo_root = Path(__file__).resolve().parent.parent
+        agregar_a_gitignore(repo_root, project_root)
 
         return 0
 

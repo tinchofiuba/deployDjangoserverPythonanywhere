@@ -21,11 +21,10 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 
 DEFAULT_VENV_ROOT = Path.home() / ".virtualenvs"
-DEFAULT_REQUIREMENTS_FILE = Path("requirements.txt")
 DEFAULT_PYTHON_BINARY = "python3.10"
 
 
@@ -50,7 +49,21 @@ def prompt(texto: str, valor_por_defecto: Optional[str] = None) -> str:
     return respuesta
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
+REPO_SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = REPO_SCRIPT_DIR.parent
+
+
+IGNORED_FOLDERS = {
+    "scripts",
+    ".git",
+    ".github",
+    "__pycache__",
+    ".venv",
+    ".virtualenvs",
+}
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     """Interpreta argumentos opcionales para automatizar el flujo."""
     parser = argparse.ArgumentParser(
         description="Crea un virtualenv en PythonAnywhere con ayudas interactivas."
@@ -69,7 +82,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--requirements",
-        help="Ruta al archivo requirements.txt (default interactivo: ./requirements.txt).",
+        help="Ruta al archivo requirements.txt del proyecto Django.",
     )
     parser.add_argument(
         "--reuse",
@@ -218,6 +231,62 @@ def mostrar_resumen_final(
     print("    deactivate")
 
 
+def detectar_candidatos_de_proyecto(repo_root: Path) -> list[Path]:
+    candidatos = []
+    for item in repo_root.iterdir():
+        if not item.is_dir():
+            continue
+        if item.name in IGNORED_FOLDERS or item.name.startswith("."):
+            continue
+        candidatos.append(item)
+    return candidatos
+
+
+def seleccionar_requirements_automatico(repo_root: Path) -> Path:
+    candidatos = detectar_candidatos_de_proyecto(repo_root)
+    if not candidatos:
+        raise SetupError(
+            "No se encontró ningún directorio de proyecto en este repositorio.\n\n"
+            "Asegurate de clonar primero el repositorio del proyecto a gestionar con Django "
+            "dentro de este directorio (por ejemplo, una carpeta llamada\n"
+            "    django_api_nombre_del_proyecto/\n"
+            "que contenga un requirements.txt)."
+        )
+
+    encontrados = []
+
+    for carpeta in candidatos:
+        req = carpeta / "requirements.txt"
+        if req.exists():
+            encontrados.append(req)
+
+    if not encontrados:
+        nombres = ", ".join(c.name for c in candidatos) or "(ninguna detectada)"
+        raise SetupError(
+            "No se encontró requirements.txt en las carpetas de proyecto detectadas.\n"
+            "Por favor, verificá que el proyecto a gestionar con Django tenga un "
+            "archivo requirements.txt en su directorio raíz.\n"
+            f"Carpetas detectadas: {nombres}."
+        )
+
+    if len(encontrados) == 1:
+        return encontrados[0]
+
+    print("Se detectaron múltiples archivos requirements.txt:")
+    for idx, ruta in enumerate(encontrados, start=1):
+        print(f"  {idx}. {ruta}")
+
+    while True:
+        respuesta = prompt(
+            "Seleccioná el número del archivo a utilizar", valor_por_defecto="1"
+        )
+        if respuesta.isdigit():
+            indice = int(respuesta)
+            if 1 <= indice <= len(encontrados):
+                return encontrados[indice - 1]
+        print("Opción inválida. Intentá nuevamente.")
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     try:
         print("=== Setup de entorno virtual para PythonAnywhere ===")
@@ -238,10 +307,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
         validar_interprete(python_bin, args.dry_run)
 
-        requirements_input = args.requirements or prompt(
-            "Ruta al archivo requirements.txt", str(DEFAULT_REQUIREMENTS_FILE)
-        )
-        requirements_path = Path(requirements_input).resolve()
+        if args.requirements:
+            requirements_path = Path(args.requirements).expanduser().resolve()
+        else:
+            requirements_path = seleccionar_requirements_automatico(REPO_ROOT).resolve()
+            print(f"Se utilizará el requirements del proyecto: {requirements_path}")
 
         validar_requirements(requirements_path)
 

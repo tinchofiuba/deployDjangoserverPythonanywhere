@@ -22,7 +22,6 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
-from getpass import getpass
 
 
 DEFAULT_VENV_ROOT = Path.home() / ".virtualenvs"
@@ -82,51 +81,6 @@ def prompt_bool(texto: str, valor_por_defecto: bool = True) -> bool:
         print(f"❌ {accion}{origen}")
     print()
     return decision
-
-
-def agregar_linea_unica(archivo: Path, linea: str) -> None:
-    if archivo.exists():
-        lineas = archivo.read_text(encoding="utf-8").splitlines()
-        if linea in lineas:
-            return
-        lineas.append(linea)
-        archivo.write_text("\n".join(lineas) + "\n", encoding="utf-8")
-    else:
-        archivo.write_text(linea + "\n", encoding="utf-8")
-
-
-def configurar_api_token(venv_path: Path) -> None:
-    desea = prompt_bool(
-        "¿Deseas guardar el API token de PythonAnywhere en este virtualenv?", False
-    )
-    if not desea:
-        print("❌ No se introdujo la API token.")
-        print()
-        return
-
-    token = getpass(
-        "Ingresa el API token de PythonAnywhere (no se mostrará al escribir): "
-    ).strip()
-    if not token:
-        print("❌ No se introdujo la API token.")
-        print()
-        return
-
-    postactivate = venv_path / "bin" / "postactivate"
-    postdeactivate = venv_path / "bin" / "postdeactivate"
-
-    postactivate.parent.mkdir(parents=True, exist_ok=True)
-    agregar_linea_unica(
-        postactivate, f'export PYTHONANYWHERE_API_TOKEN="{token}"'
-    )
-    agregar_linea_unica(postdeactivate, "unset PYTHONANYWHERE_API_TOKEN")
-
-    print("✅ Se introdujo la API token.")
-    print(
-        f"   Ubicación: {postactivate}\n"
-        "   Al activar el virtualenv se exportará automáticamente y se limpiará al desactivarlo."
-    )
-    print()
 
 
 REPO_SCRIPT_DIR = Path(__file__).resolve().parent
@@ -424,7 +378,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.dry_run:
             print("\nModo dry-run: no se realizó ningún cambio en el sistema.")
         else:
-            configurar_api_token(venv_path)
             bootstrap_script = REPO_SCRIPT_DIR / "bootstrap_django.py"
             comando_str = (
                 f"python {bootstrap_script.name if bootstrap_script.exists() else 'scripts/bootstrap_django.py'} "

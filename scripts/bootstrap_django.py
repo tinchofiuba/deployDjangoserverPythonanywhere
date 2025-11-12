@@ -16,12 +16,10 @@ from __future__ import annotations
 
 import argparse
 import ast
-import os
 import re
 import shlex
 import subprocess
 import sys
-from getpass import getpass
 from pathlib import Path
 from typing import Optional
 REPO_SCRIPT_DIR = Path(__file__).resolve().parent
@@ -225,72 +223,6 @@ def obtener_version_python(venv_python: Path, dry_run: bool) -> str:
         return salida
     except subprocess.CalledProcessError:
         return "3.10"
-
-
-def obtener_api_token_desde_postactivate(venv_path: Path) -> Optional[str]:
-    postactivate = venv_path / "bin" / "postactivate"
-    if not postactivate.exists():
-        return None
-
-    for line in postactivate.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line.startswith("export PYTHONANYWHERE_API_TOKEN="):
-            _, valor = line.split("=", 1)
-            valor = valor.strip()
-            if valor.startswith('"') and valor.endswith('"'):
-                valor = valor[1:-1]
-            elif valor.startswith("'") and valor.endswith("'"):
-                valor = valor[1:-1]
-            return valor or None
-    return None
-
-
-def obtener_api_token(venv_path: Path) -> Optional[str]:
-    token = os.environ.get("PYTHONANYWHERE_API_TOKEN")
-    if token:
-        return token.strip()
-    return obtener_api_token_desde_postactivate(venv_path)
-
-
-def agregar_linea_unica(archivo: Path, linea: str) -> None:
-    if archivo.exists():
-        lineas = archivo.read_text(encoding="utf-8").splitlines()
-        if linea in lineas:
-            return
-        lineas.append(linea)
-        archivo.write_text("\n".join(lineas) + "\n", encoding="utf-8")
-    else:
-        archivo.write_text(linea + "\n", encoding="utf-8")
-
-
-def solicitar_token_interactivo(venv_path: Path) -> Optional[str]:
-    token = getpass(
-        "Ingresa el API token de PythonAnywhere (no se mostrará al escribir): "
-    ).strip()
-    if not token:
-        print("❌ No se introdujo la API token.")
-        print()
-        return None
-
-    if prompt_bool("¿Deseas guardarla en el virtualenv para próximas ejecuciones?", True):
-        postactivate = venv_path / "bin" / "postactivate"
-        postdeactivate = venv_path / "bin" / "postdeactivate"
-        postactivate.parent.mkdir(parents=True, exist_ok=True)
-        agregar_linea_unica(
-            postactivate, f'export PYTHONANYWHERE_API_TOKEN="{token}"'
-        )
-        agregar_linea_unica(postdeactivate, "unset PYTHONANYWHERE_API_TOKEN")
-        print("✅ API token guardada en el virtualenv.")
-        print(f"   Archivo: {postactivate}")
-        print(
-            "   Al activar el virtualenv se exportará automáticamente y se limpiará al desactivarlo."
-        )
-        print()
-    else:
-        print("✅ La API token se usará sólo en esta ejecución.")
-        print()
-
-    return token
 
 
 def run_manage_py(
@@ -726,78 +658,18 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         agregar_a_gitignore(REPO_ROOT, project_root)
 
-        configure_script = REPO_SCRIPT_DIR / "configure_pythonanywhere.py"
-        comando_config = [
-            sys.executable,
-            str(configure_script),
-            "--domain",
-            domain,
-            "--project-root",
-            str(project_root),
-            "--venv",
-            str(venv_path),
-            "--python-version",
-            python_version_api,
-        ]
-        if static_root_path:
-            comando_config += ["--static-path", str(static_root_path)]
-        comando_config_str = " ".join(shlex.quote(str(part)) for part in comando_config)
+        static_dir = static_root_path or (project_root / "staticfiles")
 
-        token_disponible = obtener_api_token(venv_path)
-        if configure_script.exists():
-            if token_disponible:
-                print(
-                    "\n¿Deseas configurar la webapp en PythonAnywhere usando la API "
-                    "con el token disponible?"
-                )
-                if prompt_bool("Configurar webapp mediante la API", False):
-                    env = os.environ.copy()
-                    env["PYTHONANYWHERE_API_TOKEN"] = token_disponible
-                    mostrar_comando(comando_config)
-                    try:
-                        subprocess.run(comando_config, check=True, env=env)
-                    except subprocess.CalledProcessError as exc:
-                        print(
-                            "⚠️ Ocurrió un error al llamar al configurador de la API. "
-                            "Revisá la salida anterior para más detalles."
-                        )
-                        raise BootstrapError(
-                            "Falló la configuración automática mediante API."
-                        ) from exc
-            else:
-                print(
-                    "\n⚠️ No se detectó PYTHONANYWHERE_API_TOKEN en el entorno ni "
-                    "registrado en el virtualenv."
-                )
-                if prompt_bool("¿Deseas introducir la API token ahora?", False):
-                    token_manual = solicitar_token_interactivo(venv_path)
-                    if token_manual:
-                        env = os.environ.copy()
-                        env["PYTHONANYWHERE_API_TOKEN"] = token_manual
-                        mostrar_comando(comando_config)
-                        try:
-                            subprocess.run(comando_config, check=True, env=env)
-                        except subprocess.CalledProcessError as exc:
-                            print(
-                                "⚠️ Ocurrió un error al llamar al configurador de la API. "
-                                "Revisá la salida anterior para más detalles."
-                            )
-                            raise BootstrapError(
-                                "Falló la configuración automática mediante API."
-                            ) from exc
-                        token_disponible = token_manual
-                if not token_disponible:
-                    print(
-                        "\nCuando el token esté disponible, ejecuta manualmente:\n"
-                        f"    source {activate_script}\n"
-                        f"    {comando_config_str}"
-                    )
-        else:
-            print(
-                "\nℹ️ Si deseas automatizar la configuración en PythonAnywhere, "
-                "ejecuta (cuando esté disponible):\n"
-                f"    {comando_config_str}"
-            )
+        print("\n=== Pasos manuales en PythonAnywhere ===")
+        print("1. En la pestaña Web, pulsa “Add a new web app” y avanza con “Next” hasta elegir “Manual configuration”.")
+        print(f"2. Selecciona Python {python_version_api} (o la versión que uses en tu virtualenv).")
+        print(f"3. Source code: {project_root}")
+        print(f"4. Working directory: {project_root}")
+        print(f"5. Virtualenv: {venv_path}")
+        print(f"6. Static files → URL /static/  |  Directory {static_dir}")
+        print("7. Activa Force HTTPS si querés forzar el uso de HTTPS.")
+        print("8. (Opcional) Configura usuario y contraseña si querés proteger el sitio.")
+        print("9. Edita el archivo WSGI para apuntar al proyecto y pulsa Reload.")
 
         return 0
 

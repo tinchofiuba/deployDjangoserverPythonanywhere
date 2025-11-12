@@ -122,7 +122,8 @@ def mostrar_instructivo(datos: Dict[str, Any]) -> None:
           f"{static_root}")
     print("6. settings.py → ALLOWED_HOSTS:")
     print(
-        f"   - Añade '{domain}', 'www.{domain}' y '127.0.0.1', 'localhost' si trabajas en local."
+        f"   - Verifica que aparezcan '{domain}', 'www.{domain}', '127.0.0.1' y 'localhost' "
+        " (el script intenta añadirlos automáticamente)."
     )
     print("7. Web → Reload:")
     print("   - Pulsa “Reload” y renueva 'Run until 3 months from today'.")

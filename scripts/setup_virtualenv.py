@@ -22,6 +22,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional, Sequence
+from getpass import getpass
 
 
 DEFAULT_VENV_ROOT = Path.home() / ".virtualenvs"
@@ -44,9 +45,88 @@ def prompt(texto: str, valor_por_defecto: Optional[str] = None) -> str:
         mensaje = f"{texto}: "
 
     respuesta = input(mensaje).strip()
-    if not respuesta and valor_por_defecto is not None:
+    if respuesta:
+        print(f"✅ {texto}: {respuesta}")
+        print()
+        return respuesta
+    if valor_por_defecto is not None:
+        print(f"✅ {texto}: {valor_por_defecto} (por defecto)")
+        print()
         return valor_por_defecto
+    print()
     return respuesta
+
+
+def _accion_desde_pregunta(texto: str) -> str:
+    s = texto.strip()
+    if s.startswith("¿") and s.endswith("?"):
+        s = s[1:-1].strip()
+    return s or texto
+
+
+def prompt_bool(texto: str, valor_por_defecto: bool = True) -> bool:
+    sufijo = "S/n" if valor_por_defecto else "s/N"
+    respuesta = input(f"{texto} ({sufijo}): ").strip().lower()
+
+    if not respuesta:
+        decision = valor_por_defecto
+        origen = " (valor por defecto)"
+    else:
+        decision = respuesta in {"s", "si", "sí", "y", "yes"}
+        origen = ""
+
+    accion = _accion_desde_pregunta(texto)
+    if decision:
+        print(f"✅ {accion}{origen}")
+    else:
+        print(f"❌ {accion}{origen}")
+    print()
+    return decision
+
+
+def agregar_linea_unica(archivo: Path, linea: str) -> None:
+    if archivo.exists():
+        lineas = archivo.read_text(encoding="utf-8").splitlines()
+        if linea in lineas:
+            return
+        lineas.append(linea)
+        archivo.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+    else:
+        archivo.write_text(linea + "\n", encoding="utf-8")
+
+
+def configurar_api_token(venv_path: Path) -> None:
+    desea = prompt_bool(
+        "¿Deseas guardar el API token de PythonAnywhere en este virtualenv?", False
+    )
+    if not desea:
+        print("❌ No se introdujo la API token.")
+        print()
+        return
+
+    token = getpass(
+        "Ingresa el API token de PythonAnywhere (no se mostrará al escribir): "
+    ).strip()
+    if not token:
+        print("❌ No se introdujo la API token.")
+        print()
+        return
+
+    postactivate = venv_path / "bin" / "postactivate"
+    postdeactivate = venv_path / "bin" / "postdeactivate"
+
+    postactivate.parent.mkdir(parents=True, exist_ok=True)
+    agregar_linea_unica(
+        postactivate, f'export PYTHONANYWHERE_API_TOKEN="{token}"'
+    )
+    agregar_linea_unica(postdeactivate, "unset PYTHONANYWHERE_API_TOKEN")
+
+    print("✅ Se introdujo la API token.")
+    print(
+        f"   Ubicación: {postactivate}\n"
+        "   Al activar el virtualenv se exportará automáticamente y se limpiará al desactivarlo."
+    )
+    print()
 
 
 REPO_SCRIPT_DIR = Path(__file__).resolve().parent
@@ -272,7 +352,8 @@ def seleccionar_requirements_automatico(repo_root: Path) -> Path:
     if len(encontrados) == 1:
         return encontrados[0]
 
-    print("Se detectaron múltiples archivos requirements.txt:")
+    print("⚠️ Se detectaron múltiples archivos requirements.txt en este repositorio.")
+    print("Seleccioná cuál corresponde al proyecto que vas a gestionar con Django:")
     for idx, ruta in enumerate(encontrados, start=1):
         print(f"  {idx}. {ruta}")
 
@@ -292,7 +373,22 @@ def main(argv: Optional[list[str]] = None) -> int:
         print("=== Setup de entorno virtual para PythonAnywhere ===")
         args = parse_args(argv or sys.argv[1:])
 
-        venv_name = args.name or prompt("Nombre del virtualenv a crear")
+        if args.requirements:
+            requirements_path = Path(args.requirements).expanduser().resolve()
+            print(f"Se utilizará el requirements indicado: {requirements_path}")
+        else:
+            requirements_path = seleccionar_requirements_automatico(REPO_ROOT).resolve()
+            print()
+            print(f"Se utilizará el requirements del proyecto: {requirements_path}")
+
+        validar_requirements(requirements_path)
+        project_root = requirements_path.parent
+        proyecto_nombre = project_root.name
+        sugerido = f"{proyecto_nombre}_venv" if proyecto_nombre else "venv"
+
+        venv_name = args.name or prompt(
+            "Nombre del virtualenv a crear", sugerido
+        )
         if not venv_name:
             raise SetupError("El nombre del virtualenv no puede estar vacío.")
 
@@ -306,14 +402,6 @@ def main(argv: Optional[list[str]] = None) -> int:
             "Intérprete de Python a usar", DEFAULT_PYTHON_BINARY
         )
         validar_interprete(python_bin, args.dry_run)
-
-        if args.requirements:
-            requirements_path = Path(args.requirements).expanduser().resolve()
-        else:
-            requirements_path = seleccionar_requirements_automatico(REPO_ROOT).resolve()
-            print(f"Se utilizará el requirements del proyecto: {requirements_path}")
-
-        validar_requirements(requirements_path)
 
         creado = crear_virtualenv(
             venv_path, python_bin, dry_run=args.dry_run, reuse=args.reuse
@@ -335,6 +423,45 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         if args.dry_run:
             print("\nModo dry-run: no se realizó ningún cambio en el sistema.")
+        else:
+            configurar_api_token(venv_path)
+            bootstrap_script = REPO_SCRIPT_DIR / "bootstrap_django.py"
+            comando_str = (
+                f"python {bootstrap_script.name if bootstrap_script.exists() else 'scripts/bootstrap_django.py'} "
+                f"--project-root {project_root} --venv {venv_path} --requirements {requirements_path}"
+            )
+            if bootstrap_script.exists():
+                print("\n¿Deseas ejecutar ahora el script de bootstrap para el proyecto Django?")
+                if prompt_bool("Lanzar bootstrap_django.py", True):
+                    comando = [
+                        sys.executable,
+                        str(bootstrap_script),
+                        "--project-root",
+                        str(project_root),
+                        "--venv",
+                        str(venv_path),
+                        "--requirements",
+                        str(requirements_path),
+                    ]
+                    _mostrar_comando(comando)
+                    try:
+                        subprocess.run(comando, check=True)
+                    except subprocess.CalledProcessError as exc:
+                        print(
+                            "⚠️ Ocurrió un error al ejecutar bootstrap_django.py. "
+                            "Revisá la salida anterior para más detalles."
+                        )
+                        raise SetupError("Falló la ejecución de bootstrap_django.py.") from exc
+                else:
+                    print(
+                        "\nℹ️ Para continuar con la configuración del proyecto Django, ejecuta cuando quieras:\n"
+                        f"    {comando_str}"
+                    )
+            else:
+                print(
+                    "\nℹ️ Para continuar con la configuración del proyecto Django, ejecuta:\n"
+                    f"    {comando_str}"
+                )
 
         return 0
 

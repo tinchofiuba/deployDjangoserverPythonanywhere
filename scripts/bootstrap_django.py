@@ -15,12 +15,16 @@ facilitar el despliegue manteniendo un diálogo con la persona operadora.
 from __future__ import annotations
 
 import argparse
+import ast
+import os
+import re
 import shlex
 import subprocess
 import sys
-import re
 from pathlib import Path
 from typing import Optional
+REPO_SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = REPO_SCRIPT_DIR.parent
 
 
 class BootstrapError(RuntimeError):
@@ -34,18 +38,44 @@ def prompt(texto: str, valor_por_defecto: Optional[str] = None) -> str:
     else:
         mensaje = f"{texto}: "
     respuesta = input(mensaje).strip()
-    if not respuesta and valor_por_defecto is not None:
+    if respuesta:
+        print(f"✅ {texto}: {respuesta}")
+        print()
+        return respuesta
+    if valor_por_defecto is not None:
+        print(f"✅ {texto}: {valor_por_defecto} (por defecto)")
+        print()
         return valor_por_defecto
+    print()
     return respuesta
+
+
+def _accion_desde_pregunta(texto: str) -> str:
+    s = texto.strip()
+    if s.startswith("¿") and s.endswith("?"):
+        s = s[1:-1].strip()
+    return s or texto
 
 
 def prompt_bool(texto: str, valor_por_defecto: bool = True) -> bool:
     """Pide confirmación sí/no, devolviendo el booleano resultante."""
     sufijo = "S/n" if valor_por_defecto else "s/N"
     respuesta = input(f"{texto} ({sufijo}): ").strip().lower()
+
     if not respuesta:
-        return valor_por_defecto
-    return respuesta in {"s", "si", "sí", "y", "yes"}
+        decision = valor_por_defecto
+        origen = " (valor por defecto)"
+    else:
+        decision = respuesta in {"s", "si", "sí", "y", "yes"}
+        origen = ""
+
+    accion = _accion_desde_pregunta(texto)
+    if decision:
+        print(f"✅ {accion}{origen}")
+    else:
+        print(f"❌ {accion}{origen}")
+    print()
+    return decision
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -108,6 +138,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="No agregar automáticamente STATIC_ROOT ni crear su directorio.",
     )
+    parser.add_argument(
+        "--domain",
+        help="Dominio de la aplicación en PythonAnywhere (ej. miapp.pythonanywhere.com).",
+    )
     return parser.parse_args(argv)
 
 
@@ -160,6 +194,36 @@ def resolver_requirements(project_root: Path, valor_cli: Optional[str]) -> Path:
     por_defecto = project_root / "requirements.txt"
     respuesta = prompt("Ruta al requirements.txt", str(por_defecto))
     return Path(respuesta).expanduser().resolve()
+
+
+def resolver_dominio(valor_cli: Optional[str], project_root: Path) -> str:
+    if valor_cli:
+        return valor_cli.strip()
+    base = project_root.name or "mi_app"
+    sugerido = f"{base}.pythonanywhere.com"
+    respuesta = prompt(
+        "Dominio de la webapp en PythonAnywhere (ej. miapp.pythonanywhere.com)",
+        sugerido,
+    )
+    return respuesta.strip()
+
+
+def obtener_version_python(venv_python: Path, dry_run: bool) -> str:
+    if dry_run:
+        return "3.10"
+    try:
+        resultado = subprocess.run(
+            [str(venv_python), "--version"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        salida = resultado.stdout.strip() or resultado.stderr.strip()
+        if " " in salida:
+            return salida.split(" ")[-1]
+        return salida
+    except subprocess.CalledProcessError:
+        return "3.10"
 
 
 def run_manage_py(
@@ -341,6 +405,82 @@ def asegurar_static_root(
     return static_root_path
 
 
+def asegurar_allowed_hosts(manage_py: Path, domain: str, *, dry_run: bool) -> None:
+    domain = domain.strip()
+    if not domain:
+        return
+    settings_path = detectar_settings_file(manage_py)
+    if not settings_path or not settings_path.exists():
+        print(
+            "⚠️ No se pudo determinar el archivo settings.py para actualizar ALLOWED_HOSTS."
+        )
+        return
+
+    try:
+        contenido = settings_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        print(f"⚠️ No se pudo abrir {settings_path} para actualizar ALLOWED_HOSTS.")
+        return
+
+    patron = re.compile(r"ALLOWED_HOSTS\s*=\s*(\[[^\]]*\])", re.MULTILINE)
+    match = patron.search(contenido)
+
+    hosts_a_agregar = [
+        domain,
+        f"www.{domain}",
+        "127.0.0.1",
+        "localhost",
+    ]
+
+    if match:
+        lista_txt = match.group(1)
+        try:
+            actuales = ast.literal_eval(lista_txt)
+            if not isinstance(actuales, list):
+                raise ValueError
+        except (ValueError, SyntaxError):
+            print(
+                f"⚠️ No se pudo interpretar ALLOWED_HOSTS en {settings_path}. "
+                "Actualizalo manualmente."
+            )
+            return
+
+        modificada = False
+        for host in hosts_a_agregar:
+            if host not in actuales:
+                actuales.append(host)
+                modificada = True
+
+        if not modificada:
+            return
+
+        nueva_lista = "[" + ", ".join(f"'{h}'" for h in actuales) + "]"
+        nuevo_contenido = (
+            contenido[: match.start(1)] + nueva_lista + contenido[match.end(1) :]
+        )
+    else:
+        nueva_lista = "[" + ", ".join(f"'{h}'" for h in hosts_a_agregar) + "]"
+        bloque = (
+            "\n# Añadido automáticamente por scripts/bootstrap_django.py\n"
+            f"ALLOWED_HOSTS = {nueva_lista}\n"
+        )
+        nuevo_contenido = contenido + bloque
+
+    if dry_run:
+        print(
+            "\n[dry-run] Se omitió la actualización de ALLOWED_HOSTS. "
+            "Host sugeridos:\n"
+            + "\n".join(f"  - {h}" for h in hosts_a_agregar)
+        )
+        return
+
+    settings_path.write_text(nuevo_contenido, encoding="utf-8")
+    print(
+        "✅ ALLOWED_HOSTS actualizado con los dominios sugeridos "
+        f"en {settings_path}."
+    )
+
+
 def agregar_a_gitignore(repo_root: Path, project_root: Path) -> None:
     try:
         relative = project_root.relative_to(repo_root)
@@ -383,12 +523,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         activate_script = asegurar_ruta(
             venv_path / "bin" / "activate", "el script activate"
         )
-        venv_python = venv_path / "bin" / "python"
-        asegurar_ruta(venv_python, "el ejecutable python del virtualenv")
-
         dry_run = args.dry_run
         if dry_run:
             print("🧪 Modo dry-run: se mostrarán los comandos sin ejecutarlos.")
+
+        venv_python = venv_path / "bin" / "python"
+        asegurar_ruta(venv_python, "el ejecutable python del virtualenv")
+        python_version = obtener_version_python(venv_python, dry_run)
+        python_version_api = (
+            ".".join(python_version.split(".")[:2]) if python_version else "3.10"
+        )
 
         if not manage_existe:
             print(
@@ -398,9 +542,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             if prompt_bool(
                 "¿Deseas crear un nuevo proyecto Django aquí?", args.force_startproject
             ):
-                nombre_proyecto = args.project_name or prompt(
-                    "Nombre del proyecto Django (usado en startproject)"
+                base_nombre = args.project_name or project_root.name or "mi_proyecto"
+                if not base_nombre.endswith("_api"):
+                    sugerencia_nombre = f"{base_nombre}_api"
+                else:
+                    sugerencia_nombre = base_nombre
+                nombre_proyecto = prompt(
+                    "Nombre del proyecto Django (usado en startproject)",
+                    sugerencia_nombre,
                 )
+                if args.project_name:
+                    nombre_proyecto = args.project_name
                 crear_proyecto_django(
                     venv_python, project_root, nombre_proyecto, dry_run=dry_run
                 )
@@ -428,6 +580,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             skip_auto=args.skip_auto_static_root,
         )
 
+        domain = resolver_dominio(args.domain, project_root)
+
         upgrade_pip = args.upgrade_pip or prompt_bool(
             "¿Actualizar pip en el virtualenv antes de instalar dependencias?", False
         )
@@ -449,7 +603,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"manage.py: {manage_py}")
         print(f"Virtualenv: {venv_path}")
         print(f"Script activate: {activate_script}")
+        print(f"Python del venv: {python_version}")
         print(f"Requirements: {requirements_path}")
+        print(f"Dominio: {domain}")
         if static_root_path:
             print(f"STATIC_ROOT: {static_root_path}")
         else:
@@ -486,6 +642,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 venv_python, manage_py, ["collectstatic", "--noinput"], dry_run=dry_run
             )
 
+        asegurar_allowed_hosts(manage_py, domain, dry_run=dry_run)
         print("\n✅ Bootstrap de Django completado.")
         print("Recuerda desde el panel de PythonAnywhere:")
         print("  - Configurar el virtualenv en Web → Manual configuration.")
@@ -500,8 +657,56 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "\n⚠️ Como estaba en modo dry-run, ninguna acción se ejecutó realmente."
             )
 
-        repo_root = Path(__file__).resolve().parent.parent
-        agregar_a_gitignore(repo_root, project_root)
+        agregar_a_gitignore(REPO_ROOT, project_root)
+
+        configure_script = REPO_SCRIPT_DIR / "configure_pythonanywhere.py"
+        comando_config = [
+            sys.executable,
+            str(configure_script),
+            "--domain",
+            domain,
+            "--project-root",
+            str(project_root),
+            "--venv",
+            str(venv_path),
+            "--python-version",
+            python_version_api,
+        ]
+        if static_root_path:
+            comando_config += ["--static-path", str(static_root_path)]
+        comando_config_str = " ".join(shlex.quote(str(part)) for part in comando_config)
+
+        api_token = os.environ.get("PYTHONANYWHERE_API_TOKEN")
+        if configure_script.exists():
+            if api_token:
+                print(
+                    "\n¿Deseas configurar la webapp en PythonAnywhere usando la API "
+                    "con el token disponible?"
+                )
+                if prompt_bool("Configurar webapp mediante la API", False):
+                    mostrar_comando(comando_config)
+                    try:
+                        subprocess.run(comando_config, check=True)
+                    except subprocess.CalledProcessError as exc:
+                        print(
+                            "⚠️ Ocurrió un error al llamar al configurador de la API. "
+                            "Revisá la salida anterior para más detalles."
+                        )
+                        raise BootstrapError(
+                            "Falló la configuración automática mediante API."
+                        ) from exc
+            else:
+                print(
+                    "\nℹ️ Para configurar la webapp automáticamente vía API, exporta "
+                    "PYTHONANYWHERE_API_TOKEN y ejecuta:\n"
+                    f"    {comando_config_str}"
+                )
+        else:
+            print(
+                "\nℹ️ Si deseas automatizar la configuración en PythonAnywhere, "
+                "ejecuta (cuando esté disponible):\n"
+                f"    {comando_config_str}"
+            )
 
         return 0
 
